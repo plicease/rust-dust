@@ -1,0 +1,11 @@
+[package]
+name = "nx-dust"
+version = "0.7.0"
+edition = "2021"
+authors = ["Graham Ollis <plicease@cpan.org>"]
+description = "directory dusting: du -s -c -h * | sort"
+license = "Artistic-1.0-Perl OR GPL-1.0-or-later"
+
+[[bin]]
+name = "dust"
+path = "src/main.rs"

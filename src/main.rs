@@ -8,7 +8,11 @@ use std::process::ExitCode;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "dust", about = "directory dusting: du -s -c -h * | sort")]
+#[command(
+    name = "dust",
+    about = "directory dusting, similar to: du -s -c -h * | sort",
+    version
+)]
 struct Options {
     /// only include directories when listing the current directory
     #[arg(short = 'd')]
@@ -30,6 +34,55 @@ fn default_list(directory_only: bool) -> std::io::Result<Vec<String>> {
     Ok(list)
 }
 
+#[cfg(unix)]
+fn disk_usage(_path: &Path, meta: &fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.blocks() * 512
+}
+
+#[cfg(windows)]
+fn disk_usage(path: &Path, meta: &fs::Metadata) -> u64 {
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileStandardInfo, GetFileInformationByHandleEx, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_STANDARD_INFO,
+    };
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    if meta.file_type().is_symlink() {
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+
+    let file = match options.open(path) {
+        Ok(file) => file,
+        Err(_) => return meta.len(),
+    };
+
+    let mut info: FILE_STANDARD_INFO = unsafe { std::mem::zeroed() };
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle() as _,
+            FileStandardInfo,
+            &mut info as *mut _ as *mut _,
+            std::mem::size_of::<FILE_STANDARD_INFO>() as u32,
+        )
+    };
+
+    if ok == 0 {
+        meta.len()
+    } else {
+        info.AllocationSize as u64
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn disk_usage(_path: &Path, meta: &fs::Metadata) -> u64 {
+    meta.len()
+}
+
 fn dir_size(path: &Path) -> u64 {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
@@ -37,7 +90,7 @@ fn dir_size(path: &Path) -> u64 {
     };
 
     if !meta.is_dir() {
-        return meta.len();
+        return disk_usage(path, &meta);
     }
 
     let entries = match fs::read_dir(path) {

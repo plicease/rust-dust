@@ -1,6 +1,6 @@
 [package]
-name = "nx-dust"
-version = "0.7.0"
+name = "dust"
+version = "0.7.1"
 edition = "2021"
 authors = ["Graham Ollis <plicease@cpan.org>"]
 description = "directory dusting: du -s -c -h * | sort"
@@ -9,3 +9,9 @@ license = "Artistic-1.0-Perl OR GPL-1.0-or-later"
 [[bin]]
 name = "dust"
 path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6.6", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }

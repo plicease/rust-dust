@@ -5,34 +5,21 @@ use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
-#[derive(Debug)]
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "dust",
+    about = "directory dusting, similar to: du -s -c -h * | sort",
+    version
+)]
 struct Options {
+    /// only include directories when listing the current directory
+    #[arg(short = 'd')]
     directory_only: bool,
+
+    /// files or directories to measure (default: contents of current directory)
     list: Vec<String>,
-}
-
-fn parse_args(args: Vec<String>) -> Result<Options, String> {
-    let mut directory_only = false;
-    let mut list = Vec::new();
-    let mut iter = args.into_iter();
-
-    while let Some(arg) = iter.next() {
-        if arg == "-d" {
-            directory_only = true;
-        } else if arg == "--" {
-            list.extend(iter);
-            break;
-        } else if arg.starts_with('-') {
-            return Err(format!("unknown option: {arg}"));
-        } else {
-            list.push(arg);
-        }
-    }
-
-    Ok(Options {
-        directory_only,
-        list,
-    })
 }
 
 fn default_list(directory_only: bool) -> std::io::Result<Vec<String>> {
@@ -47,6 +34,55 @@ fn default_list(directory_only: bool) -> std::io::Result<Vec<String>> {
     Ok(list)
 }
 
+#[cfg(unix)]
+fn disk_usage(_path: &Path, meta: &fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.blocks() * 512
+}
+
+#[cfg(windows)]
+fn disk_usage(path: &Path, meta: &fs::Metadata) -> u64 {
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileStandardInfo, GetFileInformationByHandleEx, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_STANDARD_INFO,
+    };
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    if meta.file_type().is_symlink() {
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+
+    let file = match options.open(path) {
+        Ok(file) => file,
+        Err(_) => return meta.len(),
+    };
+
+    let mut info: FILE_STANDARD_INFO = unsafe { std::mem::zeroed() };
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle() as _,
+            FileStandardInfo,
+            &mut info as *mut _ as *mut _,
+            std::mem::size_of::<FILE_STANDARD_INFO>() as u32,
+        )
+    };
+
+    if ok == 0 {
+        meta.len()
+    } else {
+        info.AllocationSize as u64
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn disk_usage(_path: &Path, meta: &fs::Metadata) -> u64 {
+    meta.len()
+}
+
 fn dir_size(path: &Path) -> u64 {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
@@ -54,7 +90,7 @@ fn dir_size(path: &Path) -> u64 {
     };
 
     if !meta.is_dir() {
-        return meta.len();
+        return disk_usage(path, &meta);
     }
 
     let entries = match fs::read_dir(path) {
@@ -90,11 +126,11 @@ fn human_bytes(bytes: u64) -> String {
 }
 
 fn run(args: Vec<String>) -> ExitCode {
-    let opts = match parse_args(args) {
+    let opts = match Options::try_parse_from(std::iter::once("dust".to_string()).chain(args)) {
         Ok(opts) => opts,
-        Err(message) => {
-            eprintln!("{message}");
-            return ExitCode::from(2);
+        Err(err) => {
+            let _ = err.print();
+            return ExitCode::from(err.exit_code() as u8);
         }
     };
 
@@ -149,36 +185,34 @@ mod tests {
         assert_eq!(human_bytes(5 * 1024 * 1024 * 1024), "5.0G");
     }
 
+    fn parse(args: &[&str]) -> Options {
+        Options::try_parse_from(std::iter::once("dust").chain(args.iter().copied())).unwrap()
+    }
+
     #[test]
     fn parse_args_sets_directory_only() {
-        let opts = parse_args(vec!["-d".to_string()]).unwrap();
+        let opts = parse(&["-d"]);
         assert!(opts.directory_only);
         assert!(opts.list.is_empty());
     }
 
     #[test]
     fn parse_args_collects_positional_list() {
-        let opts = parse_args(vec!["foo".to_string(), "bar".to_string()]).unwrap();
+        let opts = parse(&["foo", "bar"]);
         assert!(!opts.directory_only);
         assert_eq!(opts.list, vec!["foo".to_string(), "bar".to_string()]);
     }
 
     #[test]
     fn parse_args_double_dash_stops_option_parsing() {
-        let opts = parse_args(vec![
-            "-d".to_string(),
-            "--".to_string(),
-            "-weird".to_string(),
-            "name".to_string(),
-        ])
-        .unwrap();
+        let opts = parse(&["-d", "--", "-weird", "name"]);
         assert!(opts.directory_only);
         assert_eq!(opts.list, vec!["-weird".to_string(), "name".to_string()]);
     }
 
     #[test]
     fn parse_args_rejects_unknown_option() {
-        let err = parse_args(vec!["-x".to_string()]).unwrap_err();
-        assert_eq!(err, "unknown option: -x");
+        let err = Options::try_parse_from(["dust", "-x"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 }

@@ -1,11 +1,10 @@
 // directory dusting: du -s -c -h * | sort
 
+use clap::Parser;
 use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
-
-use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -98,10 +97,7 @@ fn dir_size(path: &Path) -> u64 {
         Err(_) => return 0,
     };
 
-    entries
-        .flatten()
-        .map(|entry| dir_size(&entry.path()))
-        .sum()
+    entries.flatten().map(|entry| dir_size(&entry.path())).sum()
 }
 
 fn human_bytes(bytes: u64) -> String {

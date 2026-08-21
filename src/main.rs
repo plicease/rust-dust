@@ -155,9 +155,13 @@ fn run(args: Vec<String>) -> ExitCode {
 
     sizes.sort_by_key(|(_, size)| *size);
 
+    let total: u64 = sizes.iter().map(|(_, size)| size).sum();
+
     for (name, size) in sizes {
         println!("{}\t{name}", human_bytes(size));
     }
+
+    println!("{}\ttotal", human_bytes(total));
 
     ExitCode::SUCCESS
 }
